@@ -1,0 +1,13 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Simplified Vector Placeholder for Flux Dial Logo -->
+    <path
+        android:fillColor="#1E88E5"
+        android:pathData="M54,54m-40,0a40,40 0,1 1,80 0a40,40 0,1 1,-80 0" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M38,42c0,0 2,0 4,2s4,6 4,6l-4,4c0,0 0,2 4,6s10,10 10,10l4,-4c0,0 4,2 6,4s2,4 2,4s-2,4 -4,6s-10,0 -16,-6s-14,-10 -16,-16s-2,-12 2,-14s6,-2 6,-2" />
+</vector>
