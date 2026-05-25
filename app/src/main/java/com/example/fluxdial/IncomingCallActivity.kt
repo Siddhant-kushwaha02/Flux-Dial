@@ -2,7 +2,6 @@ package com.example.fluxdial
 
 import android.app.KeyguardManager
 import android.content.Intent
-import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
@@ -45,7 +44,8 @@ class IncomingCallActivity : ComponentActivity() {
             @Suppress("DEPRECATION")
             window.addFlags(
                 WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON,
+                WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+                WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
             )
         }
         
@@ -65,15 +65,16 @@ class IncomingCallActivity : ComponentActivity() {
             ?: "Unknown"
 
         val callerNumber = intent?.getStringExtra("caller_number")
-            ?.takeIf { it.isNotBlank() }
-            ?: CallManager.getCurrentCallerNumber()
-            ?: ""
+            ?: CallManager.getCurrentCallerNumber() ?: ""
+        
+        val isVideoCall = intent?.getBooleanExtra("is_video", false) ?: CallManager.isVideoCall()
 
         setContent {
             FluxTheme {
                 IncomingCallScreen(
                     callerName = callerName,
                     callerNumber = callerNumber,
+                    isVideoCall = isVideoCall,
                     onAnswer = {
                         FluxRingtoneManager.stopRinging()
                         CallManager.acceptCall()
@@ -108,18 +109,21 @@ class IncomingCallActivity : ComponentActivity() {
             when (event.keyCode) {
                 KeyEvent.KEYCODE_VOLUME_UP,
                 KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                    // Silence the ringing only — do NOT end the call
                     FluxRingtoneManager.silenceRinging()
-                    // Also abandon audio focus so system does not try to reassert volume
+                    
+                    // Release audio focus
                     val am = getSystemService(AUDIO_SERVICE) as AudioManager
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        am.abandonAudioFocusRequest(
-                            AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT).build()
-                        )
+                        // In silence mode, we can just abandon the generic focus
+                        // The original request is not easily available here
+                        @Suppress("DEPRECATION")
+                        am.abandonAudioFocus(null)
                     } else {
                         @Suppress("DEPRECATION")
                         am.abandonAudioFocus(null)
                     }
-                    return true
+                    return true // consume the event, don't change volume level
                 }
             }
         }
@@ -131,6 +135,7 @@ class IncomingCallActivity : ComponentActivity() {
 fun IncomingCallScreen(
     callerName: String,
     callerNumber: String,
+    isVideoCall: Boolean = false,
     onAnswer: () -> Unit,
     onDecline: () -> Unit,
     onCallEnded: () -> Unit
@@ -165,13 +170,42 @@ fun IncomingCallScreen(
             
             Text(
                 text = when (callState) {
-                    Call.STATE_RINGING -> "Incoming Call"
-                    Call.STATE_DIALING, Call.STATE_CONNECTING -> "Outgoing Call"
-                    else -> "Active Call"
+                    Call.STATE_RINGING -> if (isVideoCall) "Incoming Video Call..." else "Incoming Call..."
+                    Call.STATE_DIALING, Call.STATE_CONNECTING -> if (isVideoCall) "Outgoing Video Call..." else "Outgoing Call..."
+                    else -> if (isVideoCall) "Active Video Call" else "Active Call"
                 },
                 fontSize = 20.sp,
-                color = FluxPrimary
+                color = if (isVideoCall) Color.Green else FluxPrimary
             )
+            
+            if (isVideoCall) {
+                Box(
+                    modifier = Modifier
+                        .padding(top = 8.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(
+                            MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f)
+                        )
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Videocam,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = "VIDEO CALL",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                    }
+                }
+            }
             
             Text(
                 text = callerName,

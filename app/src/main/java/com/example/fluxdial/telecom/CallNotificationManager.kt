@@ -42,13 +42,19 @@ object CallNotificationManager {
     fun showIncomingCallNotification(
         context: Context,
         callerName: String,
-        callerNumber: String
+        callerNumber: String,
+        isVideo: Boolean = false
     ) {
         createNotificationChannel(context)
+        
+        val contentText = if (isVideo) "Incoming video call: $callerNumber" else "Incoming call: $callerNumber"
 
         // Full screen intent — opens IncomingCallActivity
         val fullScreenIntent = Intent(context, IncomingCallActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra("caller_name", callerName)
+            putExtra("caller_number", callerNumber)
+            putExtra("is_video", isVideo)
         }
         val fullScreenPendingIntent = PendingIntent.getActivity(
             context, 0, fullScreenIntent,
@@ -78,13 +84,13 @@ object CallNotificationManager {
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground) // Using existing icon
             .setContentTitle(callerName)
-            .setContentText("Incoming call: $callerNumber")
+            .setContentText(contentText)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setOngoing(true)
             .setAutoCancel(false)
-            .setColor(0xFF0164B4.toInt())
+            .setColor(if (isVideo) Color.GREEN else 0xFF0164B4.toInt())
             .setFullScreenIntent(fullScreenPendingIntent, true)
             .setContentIntent(fullScreenPendingIntent)
             // Answer button

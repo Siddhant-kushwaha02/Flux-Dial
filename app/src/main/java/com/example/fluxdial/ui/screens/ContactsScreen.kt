@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.navigation.NavController
 import com.example.fluxdial.*
+import com.example.fluxdial.telecom.CallManager
 
 @Composable
 fun ContactsScreen(navController: NavController) {
@@ -38,6 +39,11 @@ fun ContactsScreen(navController: NavController) {
     var contactsList by remember { mutableStateOf<List<Contact>>(emptyList()) }
     var searchQuery by remember { mutableStateOf("") }
     
+    // SIM Selection State
+    var showSimSelection by remember { mutableStateOf(false) }
+    var pendingNumber by remember { mutableStateOf("") }
+    val simAccounts = remember { getCallCapableSims(context) }
+
     val filteredContacts = remember(contactsList, searchQuery) {
         if (searchQuery.isBlank()) {
             contactsList
@@ -57,12 +63,29 @@ fun ContactsScreen(navController: NavController) {
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted && selectedNumber.isNotEmpty()) {
-            placeCall(context, selectedNumber)
+            val defaultAccount = getDefaultPhoneAccount(context)
+            if (simAccounts.size > 1 && defaultAccount == null) {
+                pendingNumber = selectedNumber
+                showSimSelection = true
+            } else {
+                placeCall(context, selectedNumber, false, defaultAccount)
+            }
         }
     }
 
     LaunchedEffect(Unit) {
         contactsList = fetchContacts(context)
+    }
+    
+    if (showSimSelection) {
+        SimSelectionDialog(
+            sims = simAccounts,
+            onSimSelected = { sim ->
+                placeCall(context, pendingNumber, false, sim.handle)
+                showSimSelection = false
+            },
+            onDismiss = { showSimSelection = false }
+        )
     }
 
     // ROOT must be Box — not Column, not LazyColumn
@@ -133,7 +156,13 @@ fun ContactsScreen(navController: NavController) {
                                 context, Manifest.permission.CALL_PHONE
                             ) == android.content.pm.PackageManager.PERMISSION_GRANTED
                             if (hasPermission) {
-                                placeCall(context, contact.phone)
+                                val defaultAccount = getDefaultPhoneAccount(context)
+                                if (simAccounts.size > 1 && defaultAccount == null) {
+                                    pendingNumber = contact.phone
+                                    showSimSelection = true
+                                } else {
+                                    placeCall(context, contact.phone, false, defaultAccount)
+                                }
                             } else {
                                 callPermissionLauncher.launch(Manifest.permission.CALL_PHONE)
                             }
@@ -192,7 +221,13 @@ fun ContactsScreen(navController: NavController) {
                         onClick = {
                             showContextMenu = false
                             selectedContact = null
-                            placeCall(context, contact.phone)
+                            val defaultAccount = getDefaultPhoneAccount(context)
+                            if (simAccounts.size > 1 && defaultAccount == null) {
+                                pendingNumber = contact.phone
+                                showSimSelection = true
+                            } else {
+                                placeCall(context, contact.phone, false, defaultAccount)
+                            }
                         }
                     )
                     HorizontalDivider(color = Color.Gray.copy(alpha = 0.2f))

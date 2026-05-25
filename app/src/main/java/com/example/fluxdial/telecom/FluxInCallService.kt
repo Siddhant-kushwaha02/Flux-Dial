@@ -61,14 +61,20 @@ class FluxInCallService : InCallService() {
                     ?: callerNumber.takeIf { it.isNotBlank() }
                     ?: "Unknown"
 
-                // STEP 5: Store and use
+                // Detect video call
+                val videoState = call.details?.videoState ?: android.telecom.VideoProfile.STATE_AUDIO_ONLY
+                val isVideoCall = android.telecom.VideoProfile.isVideo(videoState)
+
+                // Store in CallManager for UI access
+                CallManager.setIsVideoCall(isVideoCall)
                 CallManager.setResolvedCallerInfo(callerName, callerNumber)
 
                 // Show heads-up notification FIRST
                 CallNotificationManager.showIncomingCallNotification(
                     context = applicationContext,
                     callerName = callerName,
-                    callerNumber = callerNumber
+                    callerNumber = callerNumber,
+                    isVideo = isVideoCall
                 )
 
                 // Start ringing and vibration
@@ -83,6 +89,7 @@ class FluxInCallService : InCallService() {
                                 Intent.FLAG_ACTIVITY_SINGLE_TOP)
                         putExtra("caller_name", callerName)
                         putExtra("caller_number", callerNumber)
+                        putExtra("is_video", isVideoCall)
                     }
                     startActivity(intent)
                 }
@@ -109,6 +116,11 @@ class FluxInCallService : InCallService() {
                 // Other states don't necessarily trigger UI launch
             }
         }
+    }
+
+    override fun onSilenceRinger() {
+        super.onSilenceRinger()
+        FluxRingtoneManager.silenceRinging()
     }
 
     override fun onCallRemoved(call: Call) {

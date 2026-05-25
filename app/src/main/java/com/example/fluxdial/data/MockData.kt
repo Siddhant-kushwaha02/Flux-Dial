@@ -1,5 +1,6 @@
 package com.example.fluxdial.data
 
+import androidx.compose.runtime.mutableStateListOf
 import com.example.fluxdial.Contact
 
 enum class CallType {
@@ -13,7 +14,22 @@ data class CallLog(
     val duration: String,
     val timestamp: String,
     val isPriority: Boolean = false,
-    val summary: String = ""
+    val summary: String = "",
+    val simLabel: String? = null
 )
 
-val callLogs = emptyList<CallLog>()
+data class ConversationMemory(
+    val id: String,
+    val title: String,
+    val participants: List<Contact>,
+    val duration: String,
+    val timestamp: String,
+    val aiSummary: String,
+    val actionItems: List<String> = emptyList(),
+    val hasRecording: Boolean
+)
+
+object MockData {
+    val callLogs = emptyList<CallLog>()
+    val conversationMemories = mutableStateListOf<ConversationMemory>()
+}

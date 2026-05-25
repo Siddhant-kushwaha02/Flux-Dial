@@ -12,7 +12,10 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.ContactsContract
 import android.telecom.Call
+import android.telecom.PhoneAccountHandle
 import android.telecom.TelecomManager
+import android.telephony.SubscriptionInfo
+import android.telephony.SubscriptionManager
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -58,7 +61,19 @@ import com.example.fluxdial.utils.CallFrequencyHelper
 import com.example.fluxdial.utils.FrequentContact
 import com.example.fluxdial.ui.screens.ContactsScreen
 import com.example.fluxdial.ui.screens.HistoryScreen
+import com.example.fluxdial.ai.CallSummaryViewModel
+import com.example.fluxdial.data.ConversationMemory
+import com.example.fluxdial.data.MockData
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.RepeatMode
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
 // =====================================
 // UTILS
@@ -78,6 +93,53 @@ data class CallRecord(
     val date: String,
     val duration: String
 )
+
+data class SimAccount(
+    val label: String,
+    val number: String?,
+    val handle: PhoneAccountHandle
+)
+
+fun getCallCapableSims(context: Context): List<SimAccount> {
+    val telecomManager = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
+    val subscriptionManager = context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as SubscriptionManager
+    val accounts = mutableListOf<SimAccount>()
+    
+    if (ActivityCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) {
+        val handles = telecomManager.callCapablePhoneAccounts
+        val subs = subscriptionManager.activeSubscriptionInfoList ?: emptyList()
+        
+        for (handle in handles) {
+            val account = telecomManager.getPhoneAccount(handle) ?: continue
+            // Filter only SIM accounts
+            if (account.hasCapabilities(android.telecom.PhoneAccount.CAPABILITY_SIM_SUBSCRIPTION)) {
+                val sub = subs.find { it.subscriptionId.toString() == handle.id || it.iccId == handle.id }
+                val label = sub?.displayName?.toString() ?: account.label.toString()
+                val number = sub?.number ?: account.address?.schemeSpecificPart
+                accounts.add(SimAccount(label, number, handle))
+            }
+        }
+    }
+    return accounts
+}
+
+fun getDefaultPhoneAccount(context: Context): PhoneAccountHandle? {
+    val telecomManager = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
+    return try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            if (ActivityCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) {
+                telecomManager.userSelectedOutgoingPhoneAccount
+            } else null
+        } else {
+            if (ActivityCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) {
+                val accounts = telecomManager.callCapablePhoneAccounts
+                if (accounts.size == 1) accounts[0] else null
+            } else null
+        }
+    } catch (_: Exception) {
+        null
+    }
+}
 
 fun fetchContacts(context: Context): List<Contact> {
     val contacts = mutableListOf<Contact>()
@@ -142,17 +204,44 @@ fun fetchCallHistory(context: Context): List<CallRecord> {
     return history
 }
 
-fun placeCall(context: Context, number: String) {
+fun placeCall(context: Context, number: String, isVideo: Boolean, phoneAccountHandle: PhoneAccountHandle? = null) {
     if (number.isEmpty()) return
     
     val telecomManager = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
     val uri = Uri.fromParts("tel", number.trim(), null)
+
+    if (isVideo) {
+        val hasCameraPermission = ContextCompat.checkSelfPermission(
+            context, Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (!hasCameraPermission) {
+            Toast.makeText(
+                context,
+                "Camera permission required for video calls",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+    }
+
+    val extras = Bundle().apply {
+        if (isVideo) {
+            putInt(TelecomManager.EXTRA_START_CALL_WITH_VIDEO_STATE, android.telecom.VideoProfile.STATE_BIDIRECTIONAL)
+            putBoolean(TelecomManager.EXTRA_START_CALL_WITH_SPEAKERPHONE, true)
+        }
+        if (phoneAccountHandle != null) {
+            putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, phoneAccountHandle)
+        }
+    }
     
     try {
-        telecomManager.placeCall(uri, Bundle())
+        telecomManager.placeCall(uri, extras)
     } catch (e: SecurityException) {
+        Toast.makeText(context, "Call permission error", Toast.LENGTH_SHORT).show()
         e.printStackTrace()
     } catch (e: Exception) {
+        Toast.makeText(context, "Error placing call: ${e.message}", Toast.LENGTH_SHORT).show()
         e.printStackTrace()
     }
 }
@@ -568,6 +657,13 @@ fun DialerScreen(navController: NavController) {
 fun DialerKeypad(initialNumber: String, contacts: List<Contact>, onNumberChange: (String) -> Unit) {
     var number by remember(initialNumber) { mutableStateOf(initialNumber) }
     val context = LocalContext.current
+    var isVideoCallRequested by remember { mutableStateOf(false) }
+    
+    // SIM Selection State
+    var showSimSelection by remember { mutableStateOf(false) }
+    var pendingCallNumber by remember { mutableStateOf("") }
+    var pendingIsVideo by remember { mutableStateOf(false) }
+    val simAccounts = remember { getCallCapableSims(context) }
 
     val filteredContacts = remember(number, contacts) {
         if (number.isEmpty()) emptyList()
@@ -580,11 +676,45 @@ fun DialerKeypad(initialNumber: String, contacts: List<Contact>, onNumberChange:
     }
 
     val callPermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
-            placeCall(context, number)
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val callGranted = permissions[Manifest.permission.CALL_PHONE] ?: false
+        val cameraGranted = permissions[Manifest.permission.CAMERA] ?: true
+        
+        if (callGranted) {
+            val num = if (pendingCallNumber.isNotEmpty()) pendingCallNumber else number
+            val isVid = if (pendingCallNumber.isNotEmpty()) pendingIsVideo else isVideoCallRequested
+            
+            if (isVid && !cameraGranted) {
+                Toast.makeText(context, "Camera permission required for video call", Toast.LENGTH_SHORT).show()
+                return@rememberLauncherForActivityResult
+            }
+
+            // Check for SIM selection
+            val defaultAccount = getDefaultPhoneAccount(context)
+            if (simAccounts.size > 1 && defaultAccount == null) {
+                pendingCallNumber = num
+                pendingIsVideo = isVid
+                showSimSelection = true
+            } else {
+                placeCall(context, num, isVid, defaultAccount)
+            }
         }
+    }
+
+    if (showSimSelection) {
+        SimSelectionDialog(
+            sims = simAccounts,
+            onSimSelected = { sim ->
+                placeCall(context, pendingCallNumber, pendingIsVideo, sim.handle)
+                showSimSelection = false
+                pendingCallNumber = ""
+            },
+            onDismiss = { 
+                showSimSelection = false
+                pendingCallNumber = ""
+            }
+        )
     }
 
     Column(
@@ -593,7 +723,7 @@ fun DialerKeypad(initialNumber: String, contacts: List<Contact>, onNumberChange:
             .padding(bottom = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Matching contacts list
+        // ... (matching contacts list part)
         if (filteredContacts.isNotEmpty()) {
             LazyColumn(
                 modifier = Modifier
@@ -681,7 +811,28 @@ fun DialerKeypad(initialNumber: String, contacts: List<Contact>, onNumberChange:
         ) {
             // Video Call
             IconButton(
-                onClick = { /* Video Call */ },
+                onClick = { 
+                    if (number.isNotEmpty()) {
+                        isVideoCallRequested = true
+                        val hasCallPerm = ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED
+                        val hasCameraPerm = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+                        
+                        if (hasCallPerm && hasCameraPerm) {
+                            val defaultAccount = getDefaultPhoneAccount(context)
+                            if (simAccounts.size > 1 && defaultAccount == null) {
+                                pendingCallNumber = number
+                                pendingIsVideo = true
+                                showSimSelection = true
+                            } else {
+                                placeCall(context, number, true, defaultAccount)
+                            }
+                        } else {
+                            pendingCallNumber = number
+                            pendingIsVideo = true
+                            callPermissionLauncher.launch(arrayOf(Manifest.permission.CALL_PHONE, Manifest.permission.CAMERA))
+                        }
+                    }
+                },
                 modifier = Modifier.size(64.dp)
             ) {
                 Icon(
@@ -700,10 +851,20 @@ fun DialerKeypad(initialNumber: String, contacts: List<Contact>, onNumberChange:
                     .background(Color(0xFF2E7D32)) // Green
                     .clickable { 
                         if (number.isNotEmpty()) {
+                            isVideoCallRequested = false
                             if (ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED) {
-                                placeCall(context, number)
+                                val defaultAccount = getDefaultPhoneAccount(context)
+                                if (simAccounts.size > 1 && defaultAccount == null) {
+                                    pendingCallNumber = number
+                                    pendingIsVideo = false
+                                    showSimSelection = true
+                                } else {
+                                    placeCall(context, number, false, defaultAccount)
+                                }
                             } else {
-                                callPermissionLauncher.launch(Manifest.permission.CALL_PHONE)
+                                pendingCallNumber = number
+                                pendingIsVideo = false
+                                callPermissionLauncher.launch(arrayOf(Manifest.permission.CALL_PHONE))
                             }
                         }
                     },
@@ -732,6 +893,59 @@ fun DialerKeypad(initialNumber: String, contacts: List<Contact>, onNumberChange:
             }
         }
     }
+}
+
+@Composable
+fun SimSelectionDialog(
+    sims: List<SimAccount>,
+    onSimSelected: (SimAccount) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = FluxSurface,
+        titleContentColor = Color.White,
+        textContentColor = Color.White,
+        title = { Text("Choose SIM", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(modifier = Modifier.padding(top = 8.dp)) {
+                sims.forEachIndexed { index, sim ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSimSelected(sim) }
+                            .padding(vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(FluxPrimary.copy(alpha = 0.2f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(text = "${index + 1}", color = FluxPrimary, fontWeight = FontWeight.Bold)
+                        }
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Column {
+                            Text(text = "Sim ${index + 1} (${sim.label})", style = MaterialTheme.typography.bodyLarge, color = Color.White)
+                            if (!sim.number.isNullOrEmpty()) {
+                                Text(text = sim.number, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                            }
+                        }
+                    }
+                    if (index < sims.size - 1) {
+                        HorizontalDivider(color = Color.Gray.copy(alpha = 0.2f))
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = Color.Gray)
+            }
+        }
+    )
 }
 
 @Composable
@@ -950,7 +1164,7 @@ fun ContactDetailScreen(contactId: String, navController: NavController) {
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
-            placeCall(context, contactNumber)
+            placeCall(context, contactNumber, false)
         }
     }
 
@@ -988,7 +1202,7 @@ fun ContactDetailScreen(contactId: String, navController: NavController) {
                                 context, Manifest.permission.CALL_PHONE
                             ) == PackageManager.PERMISSION_GRANTED
                         ) {
-                            placeCall(context, contactNumber)
+                            placeCall(context, contactNumber, false)
                         } else {
                             callPermissionLauncher.launch(Manifest.permission.CALL_PHONE)
                         }
@@ -1058,9 +1272,43 @@ fun LiveCallScreen(navController: NavController) {
     val callState by CallManager.callState.collectAsState()
     val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     
+    val viewModel: CallSummaryViewModel = viewModel()
+    val summary by viewModel.summary.collectAsState()
+    val isListening by viewModel.isListening.collectAsState()
+
     var elapsedTime by remember { mutableStateOf("00:00") }
     
+    // Logic to handle call completion and cleanup
+    val endCallAndNavigateBack = {
+        val finalSummary = viewModel.stopSession()
+        val number = call?.details?.handle?.schemeSpecificPart ?: "Unknown"
+        val name = getContactName(context, number) ?: "Active Call"
+        
+        MockData.conversationMemories.add(0,
+            ConversationMemory(
+                id = System.currentTimeMillis().toString(),
+                title = "Call with $name",
+                participants = emptyList(),
+                duration = elapsedTime,
+                timestamp = "Just now",
+                aiSummary = finalSummary.summary,
+                actionItems = finalSummary.actionItems,
+                hasRecording = true
+            )
+        )
+        CallManager.endCall()
+        navController.navigate("dialer") {
+            popUpTo("dialer") { inclusive = true }
+        }
+    }
+
     LaunchedEffect(callState) {
+        if (callState == Call.STATE_ACTIVE) {
+            viewModel.startSession()
+        } else if (callState == Call.STATE_DISCONNECTED || callState == Call.STATE_DISCONNECTING) {
+            endCallAndNavigateBack()
+        }
+        
         while (callState == Call.STATE_ACTIVE) {
             elapsedTime = CallManager.getCallDuration()
             delay(1000)
@@ -1086,6 +1334,33 @@ fun LiveCallScreen(navController: NavController) {
         val name = remember(number) { getContactName(context, number) ?: "Active Call" }
         
         Text(name, fontSize = 32.sp, color = Color.White)
+        
+        val isVideoCall = remember(callState) { CallManager.isVideoCall() }
+        if (isVideoCall) {
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(
+                        MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f)
+                    )
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Icon(
+                    Icons.Default.Videocam,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier.size(16.dp)
+                )
+                Text(
+                    text = "VIDEO ACTIVE",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.secondary
+                )
+            }
+        }
+
         Text(elapsedTime, color = Color.Gray)
         
         Spacer(modifier = Modifier.height(32.dp))
@@ -1094,11 +1369,43 @@ fun LiveCallScreen(navController: NavController) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("LIVE SUMMARY", fontSize = 12.sp, color = Color.Gray, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    if (isListening) {
+                        PulsingDot()
+                    }
                     Spacer(modifier = Modifier.weight(1f))
                     Icon(Icons.Default.AutoAwesome, null, tint = FluxPrimary, modifier = Modifier.size(16.dp))
                 }
                 Spacer(modifier = Modifier.height(8.dp))
-                Text("Discussing Project Nebula timelines...", color = Color.White)
+                AnimatedContent(
+                    targetState = summary.summary,
+                    transitionSpec = { fadeIn() togetherWith fadeOut() },
+                    label = "SummaryAnim"
+                ) { summaryText ->
+                    Text(text = summaryText, color = Color.White)
+                }
+
+                if (summary.actionItems.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(text = "ACTION ITEMS", fontSize = 10.sp, color = Color.Gray, fontWeight = FontWeight.Bold)
+                    summary.actionItems.forEach { item ->
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+                            Icon(Icons.Default.Check, null, tint = FluxPrimary, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(text = item, color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp)
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+                TextButton(
+                    onClick = { viewModel.requestSummaryNow() },
+                    modifier = Modifier.align(Alignment.End)
+                ) {
+                    Icon(Icons.Default.Refresh, null, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Summarise now", fontSize = 10.sp)
+                }
             }
         }
         
@@ -1151,14 +1458,32 @@ fun LiveCallScreen(navController: NavController) {
         
         IconButton(
             onClick = { 
-                CallManager.endCall()
-                navController.popBackStack()
+                endCallAndNavigateBack()
             },
             modifier = Modifier.size(64.dp).background(Color.Red, CircleShape)
         ) {
             Icon(Icons.Default.CallEnd, null, tint = Color.White)
         }
     }
+}
+
+@Composable
+fun PulsingDot() {
+    val infiniteTransition = rememberInfiniteTransition(label = "Pulse")
+    val alpha by infiniteTransition.animateFloat(
+        initialValue = 1f, targetValue = 0.3f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(800),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "AlphaPulse"
+    )
+    Box(
+        modifier = Modifier
+            .size(8.dp)
+            .clip(CircleShape)
+            .background(Color.Red.copy(alpha = alpha))
+    )
 }
 
 @Composable
@@ -1295,6 +1620,8 @@ fun SettingsItem(icon: ImageVector, title: String, sub: String, extra: String = 
 
 @Composable
 fun MemoryScreen(navController: NavController) {
+    val memories = MockData.conversationMemories
+
     Column(modifier = Modifier.fillMaxSize().background(FluxBackground)) {
         FluxTopBar(
             title = "AI Memory",
@@ -1312,29 +1639,113 @@ fun MemoryScreen(navController: NavController) {
             SuggestionChip(onClick = {}, label = { Text("Recent Calls") }, icon = { Icon(Icons.Default.Schedule, null) })
         }
         
-        LazyColumn(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
             item {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.AutoAwesome, null, tint = FluxPrimary, modifier = Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Action Items Extracted", color = Color.White.copy(alpha = 0.7f))
                 }
-                Spacer(modifier = Modifier.height(16.dp))
-                Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                    Text("No action items yet", color = Color.Gray, fontSize = 12.sp)
+                Spacer(modifier = Modifier.height(12.dp))
+                
+                val allActionItems = memories.flatMap { it.actionItems }
+                if (allActionItems.isEmpty()) {
+                    Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                        Text("No action items yet", color = Color.Gray, fontSize = 12.sp)
+                    }
+                } else {
+                    allActionItems.take(5).forEach { item ->
+                        ActionItemCard(title = "Task", desc = item)
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
                 }
             }
             
             item {
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.Timeline, null, tint = Color.Gray, modifier = Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Conversation Memory", color = Color.White.copy(alpha = 0.7f))
                 }
-                Spacer(modifier = Modifier.height(16.dp))
-                Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                    Text("No conversation history", color = Color.Gray, fontSize = 12.sp)
+            }
+
+            if (memories.isEmpty()) {
+                item {
+                    Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                        Text("No conversation history", color = Color.Gray, fontSize = 12.sp)
+                    }
+                }
+            } else {
+                items(memories) { memory ->
+                    MemoryCard(
+                        title = memory.title,
+                        time = memory.timestamp,
+                        summary = memory.aiSummary,
+                        actionItems = memory.actionItems
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ActionItemCard(title: String, desc: String) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = FluxCardBackground),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(Icons.Default.CheckCircle, null, tint = FluxPrimary, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(12.dp))
+            Column {
+                Text(title, style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                Text(desc, style = MaterialTheme.typography.bodySmall, color = Color.White)
+            }
+        }
+    }
+}
+
+@Composable
+fun MemoryCard(title: String, time: String, summary: String, actionItems: List<String>) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = FluxCardBackground),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(title, fontWeight = FontWeight.Bold, color = Color.White)
+                Text(time, fontSize = 10.sp, color = Color.Gray)
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = summary,
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White.copy(alpha = 0.8f)
+            )
+            
+            if (actionItems.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider(color = Color.Gray.copy(alpha = 0.2f))
+                Spacer(modifier = Modifier.height(8.dp))
+                actionItems.forEach { item ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Check, null, tint = FluxPrimary, modifier = Modifier.size(12.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(item, fontSize = 11.sp, color = Color.Gray)
+                    }
                 }
             }
         }

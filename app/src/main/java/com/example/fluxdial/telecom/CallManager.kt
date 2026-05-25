@@ -18,6 +18,7 @@ object CallManager {
     private var _wasAnswered = false
     private var _resolvedCallerName: String? = null
     private var _resolvedCallerNumber: String? = null
+    private var _isVideoCall = false
 
     private val callCallback = object : Call.Callback() {
         override fun onStateChanged(call: Call, state: Int) {
@@ -78,12 +79,18 @@ object CallManager {
         endCall()
     }
 
-    fun answerCall() {
-        _currentCall.value?.answer(0)
+    fun answerCall(videoState: Int = 0) {
+        _currentCall.value?.answer(videoState)
     }
 
     fun acceptCall() {
-        answerCall()
+        val call = _currentCall.value
+        val videoState = if (isVideoCall()) {
+            call?.details?.videoState ?: android.telecom.VideoProfile.STATE_BIDIRECTIONAL
+        } else {
+            0
+        }
+        answerCall(videoState)
     }
 
     fun rejectCall() {
@@ -98,6 +105,12 @@ object CallManager {
         return _callState.value == Call.STATE_DIALING || 
                _callState.value == Call.STATE_CONNECTING
     }
+
+    fun setIsVideoCall(isVideo: Boolean) {
+        _isVideoCall = isVideo
+    }
+
+    fun isVideoCall(): Boolean = _isVideoCall
 
     fun setResolvedCallerInfo(name: String, number: String) {
         _resolvedCallerName = name
@@ -122,6 +135,7 @@ object CallManager {
         _wasAnswered = false
         _resolvedCallerName = null
         _resolvedCallerNumber = null
+        _isVideoCall = false
     }
 
     // AI Placeholders

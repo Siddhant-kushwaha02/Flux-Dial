@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.CallLog as SystemCallLog
 import android.provider.ContactsContract
+import android.telephony.SubscriptionManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.CallMade
 import androidx.compose.material.icons.automirrored.filled.CallMissed
@@ -48,6 +50,11 @@ fun HistoryScreen(navController: NavController) {
             ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALL_LOG) == PackageManager.PERMISSION_GRANTED
         )
     }
+    
+    // SIM Selection State
+    var showSimSelection by remember { mutableStateOf(false) }
+    var pendingNumber by remember { mutableStateOf("") }
+    val simAccounts = remember { getCallCapableSims(context) }
 
     val launcher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -65,6 +72,17 @@ fun HistoryScreen(navController: NavController) {
         } else {
             launcher.launch(Manifest.permission.READ_CALL_LOG)
         }
+    }
+    
+    if (showSimSelection) {
+        SimSelectionDialog(
+            sims = simAccounts,
+            onSimSelected = { sim ->
+                placeCall(context, pendingNumber, false, sim.handle)
+                showSimSelection = false
+            },
+            onDismiss = { showSimSelection = false }
+        )
     }
 
     Column(modifier = Modifier.fillMaxSize().background(FluxBackground)) {
@@ -87,7 +105,25 @@ fun HistoryScreen(navController: NavController) {
             } else {
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
                     items(history) { callLog ->
-                        HistoryRow(callLog = callLog, navController = navController, context = context)
+                        HistoryRow(
+                            callLog = callLog, 
+                            navController = navController, 
+                            context = context,
+                            onCallClick = { number ->
+                                if (ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED) {
+                                    val defaultAccount = getDefaultPhoneAccount(context)
+                                    if (simAccounts.size > 1 && defaultAccount == null) {
+                                        pendingNumber = number
+                                        showSimSelection = true
+                                    } else {
+                                        placeCall(context, number, false, defaultAccount)
+                                    }
+                                } else {
+                                    // Should ideally handle permission here or in parent
+                                    placeCall(context, number, false)
+                                }
+                            }
+                        )
                     }
                 }
             }
@@ -113,6 +149,7 @@ private fun fetchRealCallLogs(context: Context): List<CallLog> {
             val typeIndex = it.getColumnIndex(SystemCallLog.Calls.TYPE)
             val dateIndex = it.getColumnIndex(SystemCallLog.Calls.DATE)
             val durationIndex = it.getColumnIndex(SystemCallLog.Calls.DURATION)
+            val accountIdIndex = it.getColumnIndex(SystemCallLog.Calls.PHONE_ACCOUNT_ID)
 
             // Validate that we have the minimum required columns
             if (numberIndex == -1 || typeIndex == -1 || dateIndex == -1) return emptyList()
@@ -121,6 +158,9 @@ private fun fetchRealCallLogs(context: Context): List<CallLog> {
                 val id = if (idIndex != -1) it.getString(idIndex) ?: "" else ""
                 val number = it.getString(numberIndex) ?: ""
                 val cachedName = if (nameIndex != -1) it.getString(nameIndex) else null
+                val accountId = if (accountIdIndex != -1) it.getString(accountIdIndex) else null
+                
+                val simLabel = getSimLabel(context, accountId)
                 
                 val type = when (it.getInt(typeIndex)) {
                     SystemCallLog.Calls.OUTGOING_TYPE -> CallType.OUTGOING
@@ -136,13 +176,29 @@ private fun fetchRealCallLogs(context: Context): List<CallLog> {
 
                 val contact = resolveContact(context, number, cachedName)
 
-                historyList.add(CallLog(id, contact, type, duration, timestamp))
+                historyList.add(CallLog(id, contact, type, duration, timestamp, simLabel = simLabel))
             }
         }
     } catch (e: Exception) {
         e.printStackTrace()
     }
     return historyList
+}
+
+private fun getSimLabel(context: Context, accountId: String?): String? {
+    if (accountId == null) return null
+    val subscriptionManager = context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as SubscriptionManager
+    return try {
+        if (androidx.core.app.ActivityCompat.checkSelfPermission(context, android.Manifest.permission.READ_PHONE_STATE) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            val subs = subscriptionManager.activeSubscriptionInfoList
+            val sub = subs?.find { it.subscriptionId.toString() == accountId || it.iccId == accountId }
+            if (sub != null) {
+                "Sim ${sub.simSlotIndex + 1}"
+            } else null
+        } else null
+    } catch (e: Exception) {
+        null
+    }
 }
 
 private fun formatTimestamp(millis: Long): String {
@@ -206,7 +262,7 @@ private fun resolveContact(context: Context, number: String, cachedName: String?
 }
 
 @Composable
-fun HistoryRow(callLog: CallLog, navController: NavController, context: Context) {
+fun HistoryRow(callLog: CallLog, navController: NavController, context: Context, onCallClick: (String) -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -234,11 +290,27 @@ fun HistoryRow(callLog: CallLog, navController: NavController, context: Context)
                 maxLines = 1,
                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
             )
-            Text(
-                text = "${callLog.type.name.lowercase().replaceFirstChar { it.uppercase() }} • ${callLog.duration}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "${callLog.type.name.lowercase().replaceFirstChar { it.uppercase() }} • ${callLog.duration}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (callLog.simLabel != null) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Surface(
+                        color = Color.Gray.copy(alpha = 0.2f),
+                        shape = RoundedCornerShape(4.dp)
+                    ) {
+                        Text(
+                            text = callLog.simLabel,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                            color = Color.Gray
+                        )
+                    }
+                }
+            }
         }
 
         // Right: relative time
@@ -250,7 +322,7 @@ fun HistoryRow(callLog: CallLog, navController: NavController, context: Context)
 
         // Call back button
         IconButton(
-            onClick = { placeCall(context, callLog.contact.phone) }
+            onClick = { onCallClick(callLog.contact.phone) }
         ) {
             Icon(
                 Icons.Default.Call,

@@ -32,8 +32,6 @@
     <!-- Overlay -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
 
-    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
-
     <!-- Haptics -->
     <uses-permission android:name="android.permission.VIBRATE"/>
 
@@ -43,12 +41,12 @@
 
     <!-- Camera -->
     <uses-permission android:name="android.permission.CAMERA"/>
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <!-- Media -->
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO"/>
 
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
-    <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
 
