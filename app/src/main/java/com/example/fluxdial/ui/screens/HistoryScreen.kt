@@ -253,11 +253,17 @@ private fun resolveContact(context: Context, number: String, cachedName: String?
                 val name = cursor.getString(1) ?: cachedName ?: number
                 Contact(id, name, number)
             } else {
-                Contact("", cachedName ?: number, number)
+                // Unknown number - use cached name (from incoming call) and number in brackets
+                val displayName = if (cachedName != null && cachedName != number) {
+                    "$cachedName ($number)"
+                } else {
+                    number
+                }
+                Contact("", displayName, number)
             }
-        } ?: Contact("", cachedName ?: number, number)
+        } ?: Contact("", if (cachedName != null && cachedName != number) "$cachedName ($number)" else number, number)
     } catch (_: Exception) {
-        Contact("", cachedName ?: number, number)
+        Contact("", if (cachedName != null && cachedName != number) "$cachedName ($number)" else number, number)
     }
 }
 

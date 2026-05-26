@@ -1,6 +1,10 @@
 package com.example.fluxdial.telecom
 
+import android.content.Context
+import android.media.AudioManager
 import android.telecom.Call
+import android.telecom.CallAudioState
+import android.telecom.InCallService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -19,6 +23,13 @@ object CallManager {
     private var _resolvedCallerName: String? = null
     private var _resolvedCallerNumber: String? = null
     private var _isVideoCall = false
+
+    private var inCallService: InCallService? = null
+    private val _audioState = MutableStateFlow<CallAudioState?>(null)
+    val audioState: StateFlow<CallAudioState?> = _audioState
+
+    private val _isNoiseCancellationActive = MutableStateFlow(false)
+    val isNoiseCancellationActive: StateFlow<Boolean> = _isNoiseCancellationActive
 
     private val callCallback = object : Call.Callback() {
         override fun onStateChanged(call: Call, state: Int) {
@@ -39,6 +50,45 @@ object CallManager {
             call.registerCallback(callCallback)
         } else {
             _callState.value = Call.STATE_DISCONNECTED
+        }
+    }
+
+    fun setInCallService(service: InCallService?) {
+        this.inCallService = service
+    }
+
+    fun onAudioStateChanged(audioState: CallAudioState) {
+        _audioState.value = audioState
+    }
+
+    fun toggleSpeaker() {
+        val currentRoute = _audioState.value?.route
+        val newRoute = if (currentRoute == CallAudioState.ROUTE_SPEAKER) {
+            CallAudioState.ROUTE_WIRED_OR_EARPIECE
+        } else {
+            CallAudioState.ROUTE_SPEAKER
+        }
+        inCallService?.setAudioRoute(newRoute)
+    }
+
+    fun toggleNoiseCancellation(context: Context) {
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val newState = !_isNoiseCancellationActive.value
+        _isNoiseCancellationActive.value = newState
+        
+        try {
+            if (newState) {
+                // Attempt to enable system-level noise suppression parameters
+                audioManager.setParameters("noise_suppression=on")
+                audioManager.setParameters("aec=on")
+                audioManager.setParameters("dualmic_noise_suppression=on")
+            } else {
+                audioManager.setParameters("noise_suppression=off")
+                audioManager.setParameters("aec=off")
+                audioManager.setParameters("dualmic_noise_suppression=off")
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 

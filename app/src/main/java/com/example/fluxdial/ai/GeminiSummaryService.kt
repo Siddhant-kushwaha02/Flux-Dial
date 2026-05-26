@@ -30,16 +30,20 @@ object GeminiSummaryService {
         )
 
         val prompt = """
-            You are a call assistant. Analyse this phone call transcript.
-            Return ONLY a JSON object with no markdown, no backticks:
+            You are an AI call assistant. Analyse the following transcript from a phone call.
+            Provide a summary, action items, and key points in JSON format.
+            
+            IMPORTANT: Return ONLY the JSON object. Do not include any other text or markdown.
+            
+            JSON structure:
             {
-              "summary": "2-3 sentence summary of the conversation so far",
-              "action_items": ["task assigned to me 1", "task 2"],
-              "key_points": ["important point 1", "point 2"]
+              "summary": "Concise summary",
+              "action_items": ["item 1", "item 2"],
+              "key_points": ["point 1", "point 2"]
             }
             
-            If transcript is too short, return:
-            {"summary": "Call in progress...", "action_items": [], "key_points": []}
+            If transcript is empty or too short, return:
+            {"summary": "Listening for conversation...", "action_items": [], "key_points": []}
             
             Transcript:
             $transcript
@@ -75,7 +79,7 @@ object GeminiSummaryService {
             conn.disconnect()
 
             val json = JSONObject(response)
-            val text = json
+            var text = json
                 .getJSONArray("candidates")
                 .getJSONObject(0)
                 .getJSONObject("content")
@@ -83,6 +87,13 @@ object GeminiSummaryService {
                 .getJSONObject(0)
                 .getString("text")
                 .trim()
+                
+            // Handle cases where Gemini might still return markdown backticks
+            if (text.startsWith("```json")) {
+                text = text.substringAfter("```json").substringBeforeLast("```").trim()
+            } else if (text.startsWith("```")) {
+                text = text.substringAfter("```").substringBeforeLast("```").trim()
+            }
 
             val result = JSONObject(text)
             val actionItems = mutableListOf<String>()

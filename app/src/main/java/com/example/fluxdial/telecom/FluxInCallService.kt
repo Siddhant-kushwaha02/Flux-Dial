@@ -25,6 +25,21 @@ class FluxInCallService : InCallService() {
         }
     }
 
+    override fun onCreate() {
+        super.onCreate()
+        CallManager.setInCallService(this)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        CallManager.setInCallService(null)
+    }
+
+    override fun onCallAudioStateChanged(audioState: android.telecom.CallAudioState) {
+        super.onCallAudioStateChanged(audioState)
+        CallManager.onAudioStateChanged(audioState)
+    }
+
     override fun onCallAdded(call: Call) {
         super.onCallAdded(call)
         call.registerCallback(callCallback)

@@ -59,6 +59,7 @@ import androidx.navigation.compose.*
 import com.example.fluxdial.telecom.CallManager
 import com.example.fluxdial.utils.CallFrequencyHelper
 import com.example.fluxdial.utils.FrequentContact
+import com.example.fluxdial.utils.CallRecorder
 import com.example.fluxdial.ui.screens.ContactsScreen
 import com.example.fluxdial.ui.screens.HistoryScreen
 import com.example.fluxdial.ai.CallSummaryViewModel
@@ -1275,11 +1276,18 @@ fun LiveCallScreen(navController: NavController) {
     val viewModel: CallSummaryViewModel = viewModel()
     val summary by viewModel.summary.collectAsState()
     val isListening by viewModel.isListening.collectAsState()
+    val transcript by viewModel.transcript.collectAsState()
+    val liveText by viewModel.liveText.collectAsState()
 
     var elapsedTime by remember { mutableStateOf("00:00") }
+    var isRecording by remember { mutableStateOf(CallRecorder.isRecordingActive()) }
     
     // Logic to handle call completion and cleanup
     val endCallAndNavigateBack = {
+        if (CallRecorder.isRecordingActive()) {
+            CallRecorder.stopRecording(context)
+            isRecording = false
+        }
         val finalSummary = viewModel.stopSession()
         val number = call?.details?.handle?.schemeSpecificPart ?: "Unknown"
         val name = getContactName(context, number) ?: "Active Call"
@@ -1363,7 +1371,35 @@ fun LiveCallScreen(navController: NavController) {
 
         Text(elapsedTime, color = Color.Gray)
         
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(24.dp))
+        
+        // Live Transcript View
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(120.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.05f)),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Box(modifier = Modifier.padding(12.dp).verticalScroll(rememberScrollState())) {
+                Column {
+                    Text(
+                        text = "LIVE TRANSCRIPT",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = FluxPrimary,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = if (liveText.isNotEmpty()) "$transcript $liveText" else if (transcript.isNotEmpty()) transcript else "Listening...",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.White.copy(alpha = 0.9f)
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
         
         Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = FluxCardBackground)) {
             Column(modifier = Modifier.padding(16.dp)) {
@@ -1423,13 +1459,14 @@ fun LiveCallScreen(navController: NavController) {
             )
             CallActionItem(Icons.Default.Dialpad, "Keypad")
             
-            var isSpeaker by remember { mutableStateOf(audioManager.isSpeakerphoneOn) }
+            val audioState by CallManager.audioState.collectAsState()
+            val isSpeaker = audioState?.route == android.telecom.CallAudioState.ROUTE_SPEAKER
+            
             CallActionItem(
                 icon = if (isSpeaker) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
                 label = "Speaker",
                 onClick = {
-                    isSpeaker = !isSpeaker
-                    audioManager.isSpeakerphoneOn = isSpeaker
+                    CallManager.toggleSpeaker()
                 }
             )
         }
@@ -1449,10 +1486,43 @@ fun LiveCallScreen(navController: NavController) {
         
         Spacer(modifier = Modifier.height(16.dp))
         
+        val isNcActive by CallManager.isNoiseCancellationActive.collectAsState()
+
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            CallSecondaryAction(Icons.Default.Videocam, "AUDIO -> VIDEO", Modifier.weight(1f))
-            CallSecondaryAction(Icons.Default.GraphicEq, "AI CLARITY", Modifier.weight(1f))
+            CallSecondaryAction(
+                icon = if (isRecording) Icons.Default.RadioButtonChecked else Icons.Default.RadioButtonUnchecked,
+                label = if (isRecording) "RECORDING..." else "RECORD CALL",
+                modifier = Modifier.weight(1f),
+                isActive = isRecording,
+                onClick = {
+                    if (isRecording) {
+                        val path = CallRecorder.stopRecording(context)
+                        isRecording = false
+                        Toast.makeText(context, "Saved to $path", Toast.LENGTH_LONG).show()
+                    } else {
+                        val num = call?.details?.handle?.schemeSpecificPart ?: "Unknown"
+                        CallRecorder.startRecording(context, num)
+                        isRecording = true
+                    }
+                }
+            )
+            CallSecondaryAction(
+                icon = Icons.Default.GraphicEq, 
+                label = "AI NOISE CANCEL", 
+                modifier = Modifier.weight(1f),
+                isActive = isNcActive,
+                onClick = { CallManager.toggleNoiseCancellation(context) }
+            )
         }
+        
+        Spacer(modifier = Modifier.height(8.dp))
+        
+        CallSecondaryAction(
+            icon = Icons.Default.Videocam, 
+            label = "AUDIO -> VIDEO", 
+            modifier = Modifier.fillMaxWidth(),
+            onClick = { /* Future: Request video upgrade */ }
+        )
         
         Spacer(modifier = Modifier.weight(1f))
         
@@ -1499,11 +1569,23 @@ fun CallActionItem(icon: ImageVector, label: String, onClick: () -> Unit = {}) {
 }
 
 @Composable
-fun CallSecondaryAction(icon: ImageVector, label: String, modifier: Modifier = Modifier) {
+fun CallSecondaryAction(
+    icon: ImageVector, 
+    label: String, 
+    modifier: Modifier = Modifier,
+    isActive: Boolean = false,
+    onClick: () -> Unit = {}
+) {
+    val containerColor = if (isActive) FluxPrimary.copy(alpha = 0.3f) else FluxCardBackground
+    val contentColor = if (isActive) FluxPrimary else Color.White
+
     Button(
-        onClick = { },
+        onClick = onClick,
         modifier = modifier.height(48.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = FluxCardBackground),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = containerColor,
+            contentColor = contentColor
+        ),
         shape = RoundedCornerShape(24.dp),
         contentPadding = PaddingValues(horizontal = 8.dp)
     ) {
@@ -1627,16 +1709,42 @@ fun MemoryScreen(navController: NavController) {
             title = "AI Memory",
             showLogo = false,
             onProfileClick = { navController.navigate("settings") },
-            navigationIcon = { Icon(Icons.Default.Menu, null, tint = Color.White) }
+            navigationIcon = { IconButton(onClick = {}) { Icon(Icons.Default.Menu, null, tint = Color.White) } }
         )
         
-        FluxSearchBar(placeholder = "Ask AI: Search your memory...")
+        FluxSearchBar(placeholder = "Ask AI: What did Sarah say a...")
         
         Spacer(modifier = Modifier.height(16.dp))
         
-        Row(modifier = Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SuggestionChip(onClick = {}, label = { Text("Action Items") }, icon = { Icon(Icons.Default.Check, null) })
-            SuggestionChip(onClick = {}, label = { Text("Recent Calls") }, icon = { Icon(Icons.Default.Schedule, null) })
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            FilterChip(
+                selected = true,
+                onClick = {},
+                label = { Text("Action Items") },
+                leadingIcon = { Icon(Icons.Default.Check, null, modifier = Modifier.size(16.dp)) },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = FluxPrimary.copy(alpha = 0.2f),
+                    selectedLabelColor = FluxPrimary,
+                    selectedLeadingIconColor = FluxPrimary
+                ),
+                border = null,
+                shape = RoundedCornerShape(12.dp)
+            )
+            FilterChip(
+                selected = false,
+                onClick = {},
+                label = { Text("Recent Calls") },
+                leadingIcon = { Icon(Icons.Default.Schedule, null, modifier = Modifier.size(16.dp)) },
+                colors = FilterChipDefaults.filterChipColors(
+                    labelColor = Color.Gray,
+                    iconColor = Color.Gray
+                ),
+                border = null,
+                shape = RoundedCornerShape(12.dp)
+            )
         }
         
         LazyColumn(
@@ -1645,21 +1753,21 @@ fun MemoryScreen(navController: NavController) {
         ) {
             item {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.AutoAwesome, null, tint = FluxPrimary, modifier = Modifier.size(20.dp))
+                    Icon(Icons.Default.AutoAwesome, null, tint = FluxPrimary.copy(alpha = 0.5f), modifier = Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Action Items Extracted", color = Color.White.copy(alpha = 0.7f))
+                    Text("Action Items Extracted", style = MaterialTheme.typography.titleMedium, color = Color.White.copy(alpha = 0.7f))
                 }
                 Spacer(modifier = Modifier.height(12.dp))
                 
-                val allActionItems = memories.flatMap { it.actionItems }
+                val allActionItems = memories.flatMap { m -> m.actionItems.map { m.title to it } }
                 if (allActionItems.isEmpty()) {
                     Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
                         Text("No action items yet", color = Color.Gray, fontSize = 12.sp)
                     }
                 } else {
-                    allActionItems.take(5).forEach { item ->
-                        ActionItemCard(title = "Task", desc = item)
-                        Spacer(modifier = Modifier.height(8.dp))
+                    allActionItems.take(5).forEach { (title, item) ->
+                        ActionItemCard(user = title, time = "2 hrs ago", desc = item)
+                        Spacer(modifier = Modifier.height(12.dp))
                     }
                 }
             }
@@ -1669,7 +1777,7 @@ fun MemoryScreen(navController: NavController) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.Timeline, null, tint = Color.Gray, modifier = Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Conversation Memory", color = Color.White.copy(alpha = 0.7f))
+                    Text("Conversation Memory", style = MaterialTheme.typography.titleMedium, color = Color.White.copy(alpha = 0.7f))
                 }
             }
 
@@ -1683,9 +1791,10 @@ fun MemoryScreen(navController: NavController) {
                 items(memories) { memory ->
                     MemoryCard(
                         title = memory.title,
-                        time = memory.timestamp,
-                        summary = memory.aiSummary,
-                        actionItems = memory.actionItems
+                        participants = "Sarah C., David L.",
+                        duration = memory.duration,
+                        time = "Today, 10:00 AM",
+                        summary = memory.aiSummary
                     )
                 }
             }
@@ -1694,57 +1803,124 @@ fun MemoryScreen(navController: NavController) {
 }
 
 @Composable
-fun ActionItemCard(title: String, desc: String) {
+fun ActionItemCard(user: String, time: String, desc: String) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = FluxCardBackground),
-        shape = RoundedCornerShape(12.dp)
+        colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.1f)),
+        shape = RoundedCornerShape(40.dp) // Highly rounded as in image
     ) {
-        Row(
-            modifier = Modifier.padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(Icons.Default.CheckCircle, null, tint = FluxPrimary, modifier = Modifier.size(16.dp))
-            Spacer(modifier = Modifier.width(12.dp))
-            Column {
-                Text(title, style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                Text(desc, style = MaterialTheme.typography.bodySmall, color = Color.White)
+        Column(modifier = Modifier.padding(20.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(modifier = Modifier.size(32.dp).clip(CircleShape).background(Color.DarkGray))
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    text = "$user • $time",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color.White.copy(alpha = 0.6f)
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                Icon(Icons.Default.MoreHoriz, null, tint = Color.White.copy(alpha = 0.4f))
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = desc,
+                style = MaterialTheme.typography.bodyLarge,
+                color = Color.White.copy(alpha = 0.9f),
+                lineHeight = 22.sp
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Button(
+                    onClick = { },
+                    modifier = Modifier.weight(1f).height(48.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = FluxPrimary.copy(alpha = 0.4f)),
+                    shape = RoundedCornerShape(24.dp)
+                ) {
+                    Text("Mark Done", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Box(
+                    modifier = Modifier.size(48.dp).clip(RoundedCornerShape(16.dp)).background(Color.White.copy(alpha = 0.1f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Default.Event, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(20.dp))
+                }
             }
         }
     }
 }
 
 @Composable
-fun MemoryCard(title: String, time: String, summary: String, actionItems: List<String>) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = FluxCardBackground),
-        shape = RoundedCornerShape(16.dp)
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(title, fontWeight = FontWeight.Bold, color = Color.White)
-                Text(time, fontSize = 10.sp, color = Color.Gray)
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = summary,
-                style = MaterialTheme.typography.bodySmall,
-                color = Color.White.copy(alpha = 0.8f)
-            )
-            
-            if (actionItems.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(12.dp))
-                HorizontalDivider(color = Color.Gray.copy(alpha = 0.2f))
-                Spacer(modifier = Modifier.height(8.dp))
-                actionItems.forEach { item ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Check, null, tint = FluxPrimary, modifier = Modifier.size(12.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(item, fontSize = 11.sp, color = Color.Gray)
+fun MemoryCard(title: String, participants: String, duration: String, time: String, summary: String) {
+    Row(verticalAlignment = Alignment.Top) {
+        // Dot indicator
+        Box(
+            modifier = Modifier
+                .padding(top = 24.dp)
+                .size(16.dp)
+                .border(2.dp, FluxPrimary, CircleShape)
+                .padding(4.dp)
+                .background(FluxPrimary, CircleShape)
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.1f)),
+            shape = RoundedCornerShape(32.dp)
+        ) {
+            Column(modifier = Modifier.padding(20.dp)) {
+                Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                    Text(title, style = MaterialTheme.typography.titleLarge, color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    Surface(
+                        color = Color.Black.copy(alpha = 0.4f),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(time, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp), fontSize = 11.sp, color = Color.White)
+                    }
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.People, null, tint = Color.Gray, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("$participants • $duration", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+                Surface(
+                    color = Color.Black.copy(alpha = 0.2f),
+                    shape = RoundedCornerShape(20.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = summary,
+                        modifier = Modifier.padding(16.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.White.copy(alpha = 0.8f),
+                        lineHeight = 20.sp
+                    )
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(
+                        onClick = { },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.1f)),
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                        modifier = Modifier.height(36.dp)
+                    ) {
+                        Icon(Icons.Default.PlayCircle, null, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Play Recording", fontSize = 11.sp)
+                    }
+                    Button(
+                        onClick = { },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.1f)),
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                        modifier = Modifier.height(36.dp)
+                    ) {
+                        Icon(Icons.Default.Description, null, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Full Transcript", fontSize = 11.sp)
                     }
                 }
             }
