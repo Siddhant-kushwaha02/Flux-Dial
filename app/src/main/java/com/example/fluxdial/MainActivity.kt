@@ -1312,7 +1312,7 @@ fun LiveCallScreen(navController: NavController) {
 
     LaunchedEffect(callState) {
         if (callState == Call.STATE_ACTIVE) {
-            viewModel.startSession()
+            viewModel.startSession(clearTranscript = true)
         } else if (callState == Call.STATE_DISCONNECTED || callState == Call.STATE_DISCONNECTING) {
             endCallAndNavigateBack()
         }
@@ -1499,8 +1499,15 @@ fun LiveCallScreen(navController: NavController) {
                         val path = CallRecorder.stopRecording(context)
                         isRecording = false
                         Toast.makeText(context, "Saved to $path", Toast.LENGTH_LONG).show()
+                        
+                        // Resume AI session after recording
+                        viewModel.startSession(clearTranscript = false)
                     } else {
                         val num = call?.details?.handle?.schemeSpecificPart ?: "Unknown"
+                        
+                        // Stop AI session to free up the Microphone
+                        viewModel.stopSession()
+
                         CallRecorder.startRecording(context, num)
                         isRecording = true
                     }
@@ -1631,6 +1638,15 @@ fun SettingsScreen(navController: NavController) {
             SettingsItem(Icons.Default.RecordVoiceOver, "Voice Assistant", "AI integration")
             SettingsItem(Icons.Default.GraphicEq, "Audio Processing", "Noise cancellation & clarity")
         }
+
+        SettingsSection("USER & VOIP") {
+            SettingsItem(
+                Icons.Default.AccountCircle, 
+                "Username Setup", 
+                "Set your @username for VoIP calls",
+                onClick = { /* Navigate to Username Setup */ }
+            )
+        }
         
         SettingsSection("PRIVACY & DEVICE") {
             SettingsItem(Icons.Default.Shield, "Privacy Controls", "Manage local processing")
@@ -1673,9 +1689,9 @@ fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) 
 }
 
 @Composable
-fun SettingsItem(icon: ImageVector, title: String, sub: String, extra: String = "") {
+fun SettingsItem(icon: ImageVector, title: String, sub: String, extra: String = "", onClick: () -> Unit = {}) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(16.dp),
+        modifier = Modifier.fillMaxWidth().clickable { onClick() }.padding(16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(modifier = Modifier.size(36.dp).background(Color.DarkGray.copy(alpha = 0.3f), CircleShape), contentAlignment = Alignment.Center) {

@@ -26,8 +26,10 @@ class CallSummaryViewModel(application: Application)
 
     private var summaryJob: Job? = null
 
-    fun startSession() {
-        transcriptManager.clearTranscript()
+    fun startSession(clearTranscript: Boolean = true) {
+        if (clearTranscript) {
+            transcriptManager.clearTranscript()
+        }
         transcriptManager.startListening()
         _isListening.value = true
 

@@ -43,9 +43,19 @@ object CallRecorder {
             @Suppress("DEPRECATION")
             MediaRecorder()
         }.apply {
-            setAudioSource(MediaRecorder.AudioSource.MIC)
+            // Using VOICE_COMMUNICATION for better call capture
+            // Fallback to MIC if system blocks communication source
+            try {
+                setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+            } catch (_: Exception) {
+                setAudioSource(MediaRecorder.AudioSource.MIC)
+            }
+
             setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
             setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+            setAudioSamplingRate(44100)
+            setAudioEncodingBitRate(128000)
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && pfd != null) {
                 setOutputFile(pfd.fileDescriptor)
             } else {
@@ -57,7 +67,14 @@ object CallRecorder {
                 setOutputFile(currentOutputFile)
             }
             prepare()
-            start()
+            try {
+                start()
+            } catch (e: Exception) {
+                e.printStackTrace()
+                android.widget.Toast.makeText(context, "Recording failed to start", android.widget.Toast.LENGTH_SHORT).show()
+                isRecording = false
+                return
+            }
         }
         
         isRecording = true
