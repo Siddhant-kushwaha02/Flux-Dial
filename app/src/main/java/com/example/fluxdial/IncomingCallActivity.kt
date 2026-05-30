@@ -15,6 +15,7 @@ class IncomingCallActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityIncomingCallBinding
     private val repository = CallRepository()
+    private var timerJob: kotlinx.coroutines.Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -70,11 +71,19 @@ class IncomingCallActivity : AppCompatActivity() {
         
         if (isVoip) {
             FluxRingtoneManager.startRinging(this)
+
+            // Auto-decline after 30 seconds
+            timerJob = lifecycleScope.launch {
+                kotlinx.coroutines.delay(30000)
+                repository.updateCallStatus(callId, "declined")
+                finish()
+            }
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        timerJob?.cancel()
         FluxRingtoneManager.stopRinging()
     }
 }

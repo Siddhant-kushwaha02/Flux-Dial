@@ -43,11 +43,13 @@ object CallNotificationManager {
         context: Context,
         callerName: String,
         callerNumber: String,
-        isVideo: Boolean = false
+        isVideo: Boolean = false,
+        callId: String? = null,
+        isVoip: Boolean = false
     ) {
         createNotificationChannel(context)
         
-        val contentText = if (isVideo) "Incoming video call: $callerNumber" else "Incoming call: $callerNumber"
+        val contentText = if (isVoip) "VoIP Call from $callerName" else if (isVideo) "Incoming video call: $callerNumber" else "Incoming call: $callerNumber"
 
         // Full screen intent — opens IncomingCallActivity
         val fullScreenIntent = Intent(context, IncomingCallActivity::class.java).apply {
@@ -55,6 +57,9 @@ object CallNotificationManager {
             putExtra("caller_name", callerName)
             putExtra("caller_number", callerNumber)
             putExtra("is_video", isVideo)
+            putExtra("callerUsername", callerName)
+            putExtra("callId", callId)
+            putExtra("isVoip", isVoip)
         }
         val fullScreenPendingIntent = PendingIntent.getActivity(
             context, 0, fullScreenIntent,

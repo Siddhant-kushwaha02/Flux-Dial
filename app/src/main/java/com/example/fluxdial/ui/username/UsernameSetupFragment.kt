@@ -11,7 +11,6 @@ import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.viewModels
 import androidx.lifecycle.lifecycleScope
-import com.example.fluxdial.R
 import com.example.fluxdial.databinding.FragmentUsernameSetupBinding
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -43,17 +42,20 @@ class UsernameSetupFragment : Fragment() {
         binding.etUsername.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                val username = s.toString().trim().lowercase()
-                viewModel.checkAvailability(username)
+                var input = s.toString()
+                if (!input.startsWith("@")) {
+                    input = "@$input"
+                    binding.etUsername.setText(input)
+                    binding.etUsername.setSelection(input.length)
+                }
+                viewModel.checkAvailability(input)
             }
             override fun afterTextChanged(s: Editable?) {}
         })
 
         binding.btnSave.setOnClickListener {
-            val username = binding.etUsername.text.toString().trim().lowercase()
-            if (username.isNotEmpty()) {
-                viewModel.saveUsername(username)
-            }
+            val username = binding.etUsername.text.toString()
+            viewModel.saveUsername(username)
         }
     }
 
@@ -62,19 +64,20 @@ class UsernameSetupFragment : Fragment() {
             viewModel.isAvailable.collectLatest { available ->
                 when (available) {
                     true -> {
-                        binding.tvAvailability.visibility = View.VISIBLE
-                        binding.tvAvailability.text = "Username is available!"
-                        binding.tvAvailability.setTextColor(ContextCompat.getColor(requireContext(), android.R.color.holo_green_light))
+                        binding.tvStatusIcon.text = "✅"
+                        binding.tvStatusMessage.text = "Username is available!"
+                        binding.tvStatusMessage.setTextColor(ContextCompat.getColor(requireContext(), android.R.color.holo_green_light))
                         binding.btnSave.isEnabled = true
                     }
                     false -> {
-                        binding.tvAvailability.visibility = View.VISIBLE
-                        binding.tvAvailability.text = "Username is already taken."
-                        binding.tvAvailability.setTextColor(ContextCompat.getColor(requireContext(), android.R.color.holo_red_light))
+                        binding.tvStatusIcon.text = "❌"
+                        binding.tvStatusMessage.text = "Username is already taken."
+                        binding.tvStatusMessage.setTextColor(ContextCompat.getColor(requireContext(), android.R.color.holo_red_light))
                         binding.btnSave.isEnabled = false
                     }
                     null -> {
-                        binding.tvAvailability.visibility = View.GONE
+                        binding.tvStatusIcon.text = ""
+                        binding.tvStatusMessage.text = ""
                         binding.btnSave.isEnabled = false
                     }
                 }
@@ -92,8 +95,7 @@ class UsernameSetupFragment : Fragment() {
         viewLifecycleOwner.lifecycleScope.launch {
             viewModel.saveSuccess.collectLatest { success ->
                 if (success) {
-                    Toast.makeText(context, "Username saved successfully!", Toast.LENGTH_SHORT).show()
-                    // Navigate to next screen or finish
+                    Toast.makeText(context, "Welcome to Flux Dial!", Toast.LENGTH_SHORT).show()
                     activity?.onBackPressed()
                 }
             }

@@ -5,7 +5,7 @@
     android:background="@color/black"
     android:gravity="center_horizontal"
     android:orientation="vertical"
-    android:padding="24.dp">
+    android:padding="24dp">
 
     <TextView
         android:layout_width="wrap_content"
@@ -20,33 +20,45 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
-        android:text="This is how other Flux users will call you."
+        android:text="This is how others will call you privately."
         android:textColor="#AAAAAA"
         android:textSize="14sp" />
 
-    <EditText
-        android:id="@+id/etUsername"
+    <RelativeLayout
         android:layout_width="match_parent"
-        android:layout_height="56dp"
-        android:layout_marginTop="32dp"
-        android:background="@drawable/bg_edittext"
-        android:hint="username"
-        android:inputType="textFilter"
-        android:paddingHorizontal="16dp"
-        android:textColor="@color/white"
-        android:textColorHint="#666666" />
+        android:layout_height="wrap_content"
+        android:layout_marginTop="32dp">
+
+        <EditText
+            android:id="@+id/etUsername"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:background="@drawable/bg_edittext"
+            android:hint="\@username"
+            android:inputType="textFilter"
+            android:paddingHorizontal="16dp"
+            android:textColor="@color/white"
+            android:textColorHint="#666666" />
+
+        <TextView
+            android:id="@+id/tvStatusIcon"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_alignParentEnd="true"
+            android:layout_centerVertical="true"
+            android:layout_marginEnd="16dp"
+            android:textSize="18sp" />
+    </RelativeLayout>
 
     <TextView
-        android:id="@+id/tvAvailability"
+        android:id="@+id/tvStatusMessage"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="start"
         android:layout_marginStart="4dp"
         android:layout_marginTop="8dp"
-        android:text="Check availability..."
         android:textColor="#AAAAAA"
-        android:textSize="12sp"
-        android:visibility="gone" />
+        android:textSize="12sp" />
 
     <ProgressBar
         android:id="@+id/pbLoading"
@@ -62,7 +74,7 @@
         android:layout_marginTop="32dp"
         android:backgroundTint="#1E88E5"
         android:enabled="false"
-        android:text="Save and Continue"
+        android:text="Save Username"
         android:textAllCaps="false"
         android:textColor="@color/white"
         android:textSize="16sp"

@@ -5,6 +5,8 @@ import androidx.lifecycle.viewModelScope
 import com.google.firebase.auth.ktx.auth
 import com.google.firebase.firestore.ktx.firestore
 import com.google.firebase.ktx.Firebase
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -24,15 +26,20 @@ class UsernameViewModel : ViewModel() {
     private val _saveSuccess = MutableStateFlow(false)
     val saveSuccess: StateFlow<Boolean> = _saveSuccess
 
+    private var checkJob: Job? = null
+
     fun checkAvailability(username: String) {
-        if (username.length < 3) {
+        val sanitized = username.removePrefix("@").trim().lowercase()
+        if (sanitized.length < 3) {
             _isAvailable.value = null
             return
         }
 
-        viewModelScope.launch {
+        checkJob?.cancel()
+        checkJob = viewModelScope.launch {
+            delay(500) // Debounce
             try {
-                val doc = db.collection("usernames").document(username).get().await()
+                val doc = db.collection("usernames").document(sanitized).get().await()
                 _isAvailable.value = !doc.exists()
             } catch (e: Exception) {
                 _isAvailable.value = null
@@ -42,34 +49,25 @@ class UsernameViewModel : ViewModel() {
 
     fun saveUsername(username: String) {
         val uid = auth.currentUser?.uid ?: return
+        val sanitized = username.removePrefix("@").trim().lowercase()
         
         viewModelScope.launch {
             _isSaving.value = true
             try {
-                // Use a transaction or batch to ensure atomic write
                 val batch = db.batch()
                 
-                // 1. Add to usernames collection for lookup/uniqueness
-                val usernameRef = db.collection("usernames").document(username)
+                // Uniqueness lookup
+                val usernameRef = db.collection("usernames").document(sanitized)
                 batch.set(usernameRef, mapOf("uid" to uid))
                 
-                // 2. Update user document
+                // User profile
                 val userRef = db.collection("users").document(uid)
-                batch.update(userRef, "username", username)
+                batch.set(userRef, mapOf("username" to sanitized), com.google.firebase.firestore.SetOptions.merge())
                 
                 batch.commit().await()
                 _saveSuccess.value = true
             } catch (e: Exception) {
-                // If update fails (e.g. document doesn't exist), try set
-                try {
-                    val batch = db.batch()
-                    batch.set(db.collection("usernames").document(username), mapOf("uid" to uid))
-                    batch.set(db.collection("users").document(uid), mapOf("username" to username), com.google.firebase.firestore.SetOptions.merge())
-                    batch.commit().await()
-                    _saveSuccess.value = true
-                } catch (e2: Exception) {
-                    _saveSuccess.value = false
-                }
+                _saveSuccess.value = false
             } finally {
                 _isSaving.value = false
             }

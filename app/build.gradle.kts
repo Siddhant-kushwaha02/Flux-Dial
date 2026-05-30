@@ -69,6 +69,12 @@ dependencies {
     // WebRTC
     implementation(libs.stream.webrtc)
 
+    // HTTP
+    implementation(libs.okhttp)
+
+    // Coroutines
+    implementation(libs.kotlinx.coroutines.play.services)
+
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)

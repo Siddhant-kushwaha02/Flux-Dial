@@ -3,46 +3,61 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/black"
-    android:gravity="center_horizontal"
+    android:gravity="center"
     android:orientation="vertical"
     android:padding="24dp">
 
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="48dp"
-        android:text="Private VoIP Call"
+        android:layout_marginBottom="32dp"
+        android:text="Flux Dial"
         android:textColor="@color/white"
-        android:textSize="24sp"
+        android:textSize="32sp"
         android:textStyle="bold" />
 
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:text="Call anyone by their @username"
-        android:textColor="#AAAAAA"
-        android:textSize="14sp" />
-
     <EditText
-        android:id="@+id/etTargetUsername"
+        android:id="@+id/etEmail"
         android:layout_width="match_parent"
         android:layout_height="56dp"
-        android:layout_marginTop="32dp"
+        android:layout_marginBottom="16dp"
         android:background="@drawable/bg_edittext"
-        android:hint="\@username"
-        android:inputType="textFilter"
+        android:hint="Email"
+        android:inputType="textEmailAddress"
+        android:paddingHorizontal="16dp"
+        android:textColor="@color/white"
+        android:textColorHint="#666666" />
+
+    <EditText
+        android:id="@+id/etPassword"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:layout_marginBottom="32dp"
+        android:background="@drawable/bg_edittext"
+        android:hint="Password"
+        android:inputType="textPassword"
         android:paddingHorizontal="16dp"
         android:textColor="@color/white"
         android:textColorHint="#666666" />
 
     <Button
-        android:id="@+id/btnCall"
+        android:id="@+id/btnLogin"
         android:layout_width="match_parent"
         android:layout_height="56dp"
-        android:layout_marginTop="32dp"
+        android:layout_marginBottom="16dp"
+        android:backgroundTint="#1E88E5"
+        android:text="Login"
+        android:textAllCaps="false"
+        android:textColor="@color/white"
+        android:textSize="16sp"
+        android:textStyle="bold" />
+
+    <Button
+        android:id="@+id/btnRegister"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
         android:backgroundTint="#2E7D32"
-        android:text="Start Call"
+        android:text="Register"
         android:textAllCaps="false"
         android:textColor="@color/white"
         android:textSize="16sp"
